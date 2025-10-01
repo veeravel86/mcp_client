@@ -255,6 +255,142 @@
             background: #c82333;
         }
 
+        .help-btn {
+            padding: 8px 15px;
+            background: #17a2b8;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+            transition: background 0.3s;
+        }
+
+        .help-btn:hover {
+            background: #138496;
+        }
+
+        /* Help Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 10px;
+            width: 80%;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: slideDown 0.3s;
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .close {
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+
+        .close:hover {
+            opacity: 0.7;
+        }
+
+        .modal-body {
+            padding: 30px;
+            line-height: 1.8;
+        }
+
+        .modal-body h3 {
+            color: #667eea;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        .modal-body pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .modal-body code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 12px;
+            color: #e83e8c;
+        }
+
+        .modal-body ul {
+            padding-left: 20px;
+        }
+
+        .modal-body li {
+            margin-bottom: 10px;
+        }
+
+        .example-box {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            border-left: 4px solid #2196f3;
+        }
+
+        .example-box h4 {
+            margin: 0 0 10px 0;
+            color: #1976d2;
+        }
+
         .logs-container {
             max-height: 0;
             overflow: hidden;
@@ -370,6 +506,7 @@
             </div>
             <button class="logs-toggle" onclick="toggleLogs()">📋 View Logs</button>
             <button class="clear-logs-btn" onclick="clearLogs()">🗑️ Clear Logs</button>
+            <button class="help-btn" onclick="showHelp()">❓ Add Servers</button>
             <button class="connect-btn" id="connectBtn" onclick="connect()">Connect to Server</button>
         </div>
 
@@ -400,11 +537,169 @@
         </div>
     </div>
 
+    <!-- Help Modal -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📚 How to Add MCP Servers</h2>
+                <span class="close" onclick="closeHelp()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>The MCP Client supports connecting to multiple MCP servers simultaneously, just like Claude Desktop!</p>
+
+                <h3>🚀 Quick Start</h3>
+                <p>By default, clicking <strong>"Connect to Server"</strong> connects to the built-in example server with weather and math tools.</p>
+
+                <h3>➕ Adding MCP Servers</h3>
+                <p>You can add both <strong>local</strong> and <strong>remote</strong> MCP servers. Use the REST API endpoints:</p>
+
+                <h4 style="color: #27ae60; margin-top: 20px;">📁 Local Servers (Running on Your Machine)</h4>
+
+                <div class="example-box">
+                    <h4>Example 1: Local Python Server</h4>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "weather",
+    "command": "python3",
+    "args": ["/path/to/weather_server.py"]
+  }'</pre>
+                </div>
+
+                <div class="example-box">
+                    <h4>Example 2: Local Node.js Server</h4>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "nodejs-server",
+    "command": "node",
+    "args": ["/path/to/server.js"]
+  }'</pre>
+                </div>
+
+                <div class="example-box">
+                    <h4>Example 3: Local npx Command</h4>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
+  }'</pre>
+                </div>
+
+                <h4 style="color: #e74c3c; margin-top: 20px;">🌐 Remote Servers (Running on Another Machine)</h4>
+
+                <div class="example-box">
+                    <h4>Example 4: Remote Server via SSH</h4>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "remote-db",
+    "command": "ssh",
+    "args": ["user@remote-server.com", "python3", "/remote/path/server.py"]
+  }'</pre>
+                </div>
+
+                <div class="example-box">
+                    <h4>Example 5: Remote Server via HTTP/SSE</h4>
+                    <p style="color: #e74c3c;"><strong>Note:</strong> For HTTP/SSE servers, use the SSE transport (requires additional configuration)</p>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "remote-api",
+    "command": "python3",
+    "args": ["-m", "mcp.client.sse", "https://api.example.com/mcp"]
+  }'</pre>
+                </div>
+
+                <div class="example-box">
+                    <h4>Example 6: Docker Container Server</h4>
+                    <pre>curl -X POST http://localhost:5001/servers/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "docker-server",
+    "command": "docker",
+    "args": ["run", "-i", "my-mcp-server-image"]
+  }'</pre>
+                </div>
+
+                <h3>🔌 Connecting to Servers</h3>
+                <ul>
+                    <li><strong>Connect to All:</strong> Click "Connect to Server" button</li>
+                    <li><strong>Connect to Specific:</strong>
+                        <pre>curl -X POST http://localhost:5001/servers/connect \
+  -H "Content-Type: application/json" \
+  -d '{"name": "weather"}'</pre>
+                    </li>
+                </ul>
+
+                <h3>📋 Managing Servers</h3>
+                <ul>
+                    <li><strong>List Servers:</strong> <code>curl http://localhost:5001/servers</code></li>
+                    <li><strong>Remove Server:</strong>
+                        <pre>curl -X POST http://localhost:5001/servers/remove \
+  -H "Content-Type: application/json" \
+  -d '{"name": "weather"}'</pre>
+                    </li>
+                    <li><strong>Disconnect:</strong>
+                        <pre>curl -X POST http://localhost:5001/servers/disconnect \
+  -H "Content-Type: application/json" \
+  -d '{"name": "weather"}'</pre>
+                    </li>
+                </ul>
+
+                <h3>🛠️ How It Works</h3>
+                <ol>
+                    <li>Add multiple MCP servers with different tools</li>
+                    <li>Connect to all of them</li>
+                    <li>OpenAI sees <strong>all tools from all servers</strong> combined</li>
+                    <li>When OpenAI calls a tool, the client automatically routes it to the correct server</li>
+                    <li>View logs to see which server handles each request</li>
+                </ol>
+
+                <div class="example-box">
+                    <h4>💡 Example Use Case</h4>
+                    <p><strong>You:</strong> "What's the weather in NYC and show me my database records"</p>
+                    <p><strong>What happens:</strong></p>
+                    <ul style="margin-top: 10px;">
+                        <li>OpenAI calls <code>get_weather</code> → routed to Weather Server</li>
+                        <li>OpenAI calls <code>query_database</code> → routed to Database Server</li>
+                        <li>Both execute and return results in one conversation!</li>
+                    </ul>
+                </div>
+
+                <h3>📖 More Information</h3>
+                <p>For detailed documentation, see <code>MULTI_SERVER_SETUP.md</code> in the project repository.</p>
+
+                <p style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #6c757d; font-size: 14px;">
+                    <strong>Note:</strong> A full GUI-based server manager is coming soon. For now, use these API endpoints to manage your servers!
+                </p>
+            </div>
+        </div>
+    </div>
+
     <script>
         let connected = false;
         let processing = false;
         let logsExpanded = false;
         let logsPollInterval = null;
+
+        function showHelp() {
+            document.getElementById('helpModal').style.display = 'block';
+        }
+
+        function closeHelp() {
+            document.getElementById('helpModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('helpModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
 
         function toggleLogs() {
             const logsContainer = document.getElementById('logsContainer');

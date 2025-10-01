@@ -21,14 +21,14 @@ CORS(app)
 # Global MCP client state
 class MCPClientState:
     def __init__(self):
-        self.session: Optional[ClientSession] = None
-        self.exit_stack = AsyncExitStack()
+        self.servers = {}  # server_name -> {session, exit_stack, tools}
         self.client = None
-        self.available_tools = []
-        self.connected = False
+        self.available_tools = []  # Combined tools from all servers
+        self.connected_servers = []
         self.loop = None
         self.chat_history = []
         self.logs = []
+        self.server_configs = []  # List of configured servers
 
     def add_log(self, log_type: str, message: str, data: any = None):
         """Add a log entry"""
@@ -62,13 +62,75 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/connect', methods=['POST'])
-def connect():
-    """Connect to MCP server"""
-    if state.connected:
-        return jsonify({'status': 'already_connected', 'message': 'Already connected to server'})
+@app.route('/servers', methods=['GET'])
+def get_servers():
+    """Get list of configured servers"""
+    return jsonify({'servers': state.server_configs})
 
-    future = asyncio.run_coroutine_threadsafe(connect_async(), state.loop)
+
+@app.route('/servers/add', methods=['POST'])
+def add_server():
+    """Add a new MCP server configuration"""
+    data = request.json
+    server_name = data.get('name')
+    server_command = data.get('command')
+    server_args = data.get('args', [])
+
+    if not server_name or not server_command:
+        return jsonify({'status': 'error', 'message': 'Name and command are required'})
+
+    # Check if server already exists
+    if any(s['name'] == server_name for s in state.server_configs):
+        return jsonify({'status': 'error', 'message': 'Server with this name already exists'})
+
+    server_config = {
+        'name': server_name,
+        'command': server_command,
+        'args': server_args,
+        'connected': False
+    }
+
+    state.server_configs.append(server_config)
+    state.add_log('system', f'Added server configuration: {server_name}', server_config)
+
+    return jsonify({'status': 'success', 'message': f'Server {server_name} added'})
+
+
+@app.route('/servers/remove', methods=['POST'])
+def remove_server():
+    """Remove a server configuration"""
+    data = request.json
+    server_name = data.get('name')
+
+    state.server_configs = [s for s in state.server_configs if s['name'] != server_name]
+
+    # Disconnect if connected
+    if server_name in state.servers:
+        future = asyncio.run_coroutine_threadsafe(
+            disconnect_server_async(server_name), state.loop
+        )
+        future.result(timeout=5)
+
+    state.add_log('system', f'Removed server configuration: {server_name}')
+    return jsonify({'status': 'success', 'message': f'Server {server_name} removed'})
+
+
+@app.route('/servers/connect', methods=['POST'])
+def connect_server():
+    """Connect to a specific MCP server"""
+    data = request.json
+    server_name = data.get('name')
+
+    if not server_name:
+        return jsonify({'status': 'error', 'message': 'Server name is required'})
+
+    server_config = next((s for s in state.server_configs if s['name'] == server_name), None)
+    if not server_config:
+        return jsonify({'status': 'error', 'message': 'Server not found'})
+
+    future = asyncio.run_coroutine_threadsafe(
+        connect_server_async(server_config), state.loop
+    )
     try:
         result = future.result(timeout=10)
         return jsonify(result)
@@ -76,71 +138,171 @@ def connect():
         return jsonify({'status': 'error', 'message': str(e)})
 
 
-async def connect_async():
-    """Async connection to MCP server"""
+@app.route('/servers/disconnect', methods=['POST'])
+def disconnect_server():
+    """Disconnect from a specific server"""
+    data = request.json
+    server_name = data.get('name')
+
+    future = asyncio.run_coroutine_threadsafe(
+        disconnect_server_async(server_name), state.loop
+    )
     try:
-        state.add_log('system', 'Starting connection to MCP server...')
+        result = future.result(timeout=5)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
-        # Check for API key
-        if not os.environ.get("OPENAI_API_KEY"):
-            state.add_log('error', 'OPENAI_API_KEY not found in environment')
-            return {'status': 'error', 'message': 'OPENAI_API_KEY not found in environment'}
 
-        # Initialize OpenAI client
-        state.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        state.add_log('system', 'OpenAI client initialized')
+@app.route('/connect', methods=['POST'])
+def connect():
+    """Connect to all configured MCP servers"""
+    future = asyncio.run_coroutine_threadsafe(connect_all_async(), state.loop)
+    try:
+        result = future.result(timeout=30)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
-        # Get server script path
-        server_script = os.environ.get(
-            "MCP_SERVER_SCRIPT",
-            "/Users/veeravelmanivannan/AI_projects/mcp_client/mcp_server.py"
-        )
-        state.add_log('system', f'MCP server script: {server_script}')
+
+async def connect_server_async(server_config: dict):
+    """Connect to a specific MCP server"""
+    try:
+        server_name = server_config['name']
+        state.add_log('system', f'Connecting to server: {server_name}')
+
+        # Create exit stack for this server
+        exit_stack = AsyncExitStack()
 
         # Connect to MCP server
         server_params = StdioServerParameters(
-            command="python3",
-            args=[server_script],
+            command=server_config['command'],
+            args=server_config['args'],
             env=None
         )
 
-        stdio_transport = await state.exit_stack.enter_async_context(
+        stdio_transport = await exit_stack.enter_async_context(
             stdio_client(server_params)
         )
         stdio, write = stdio_transport
-        state.session = await state.exit_stack.enter_async_context(
+        session = await exit_stack.enter_async_context(
             ClientSession(stdio, write)
         )
 
-        await state.session.initialize()
-        state.add_log('mcp_server', 'MCP session initialized')
+        await session.initialize()
+        state.add_log('mcp_server', f'{server_name}: Session initialized')
 
         # List available tools
-        state.add_log('mcp_client', 'Requesting tool list from MCP server')
-        response = await state.session.list_tools()
-        state.available_tools = response.tools
+        response = await session.list_tools()
+        tools = response.tools
 
         # Log complete tool schemas
         tools_with_schemas = [
             {
                 'name': tool.name,
                 'description': tool.description,
-                'inputSchema': tool.inputSchema
-            } for tool in state.available_tools
+                'inputSchema': tool.inputSchema,
+                'server': server_name
+            } for tool in tools
         ]
-        state.add_log('mcp_server', f'Received {len(state.available_tools)} tools with schemas',
+        state.add_log('mcp_server', f'{server_name}: Received {len(tools)} tools',
                      {'tools': tools_with_schemas})
 
-        state.connected = True
+        # Store server info
+        state.servers[server_name] = {
+            'session': session,
+            'exit_stack': exit_stack,
+            'tools': tools,
+            'config': server_config
+        }
 
-        tools_list = [{'name': tool.name, 'description': tool.description} for tool in state.available_tools]
+        # Update server config status
+        for config in state.server_configs:
+            if config['name'] == server_name:
+                config['connected'] = True
 
-        state.add_log('system', 'Connection established successfully')
+        if server_name not in state.connected_servers:
+            state.connected_servers.append(server_name)
+
+        # Rebuild combined tools list
+        rebuild_tools_list()
 
         return {
             'status': 'success',
-            'message': 'Connected to server',
-            'tools': tools_list
+            'message': f'Connected to {server_name}',
+            'server': server_name,
+            'tool_count': len(tools)
+        }
+
+    except Exception as e:
+        state.add_log('error', f'Failed to connect to {server_name}: {str(e)}')
+        return {'status': 'error', 'message': str(e)}
+
+
+async def disconnect_server_async(server_name: str):
+    """Disconnect from a specific server"""
+    try:
+        if server_name in state.servers:
+            await state.servers[server_name]['exit_stack'].aclose()
+            del state.servers[server_name]
+
+            if server_name in state.connected_servers:
+                state.connected_servers.remove(server_name)
+
+            # Update server config status
+            for config in state.server_configs:
+                if config['name'] == server_name:
+                    config['connected'] = False
+
+            # Rebuild combined tools list
+            rebuild_tools_list()
+
+            state.add_log('system', f'Disconnected from {server_name}')
+            return {'status': 'success', 'message': f'Disconnected from {server_name}'}
+        else:
+            return {'status': 'error', 'message': 'Server not connected'}
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}
+
+
+async def connect_all_async():
+    """Connect to all configured servers"""
+    try:
+        # Check for API key
+        if not os.environ.get("OPENAI_API_KEY"):
+            state.add_log('error', 'OPENAI_API_KEY not found in environment')
+            return {'status': 'error', 'message': 'OPENAI_API_KEY not found in environment'}
+
+        # Initialize OpenAI client if not already done
+        if not state.client:
+            state.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            state.add_log('system', 'OpenAI client initialized')
+
+        # If no servers configured, add default
+        if not state.server_configs:
+            default_server = {
+                'name': 'default',
+                'command': 'python3',
+                'args': [os.environ.get("MCP_SERVER_SCRIPT",
+                        "/Users/veeravelmanivannan/AI_projects/mcp_client/mcp_server.py")],
+                'connected': False
+            }
+            state.server_configs.append(default_server)
+
+        # Connect to all servers
+        results = []
+        for server_config in state.server_configs:
+            if not server_config['connected']:
+                result = await connect_server_async(server_config)
+                results.append(result)
+
+        state.add_log('system', f'Connected to {len(state.connected_servers)} servers')
+
+        return {
+            'status': 'success',
+            'message': f'Connected to {len(state.connected_servers)} servers',
+            'servers': state.connected_servers,
+            'total_tools': len(state.available_tools)
         }
 
     except Exception as e:
@@ -148,11 +310,21 @@ async def connect_async():
         return {'status': 'error', 'message': str(e)}
 
 
+def rebuild_tools_list():
+    """Rebuild the combined tools list from all connected servers"""
+    state.available_tools = []
+    for server_name, server_info in state.servers.items():
+        # Add server name to each tool for tracking
+        for tool in server_info['tools']:
+            tool.server_name = server_name  # Track which server provides this tool
+            state.available_tools.append(tool)
+
+
 @app.route('/send', methods=['POST'])
 def send_message():
     """Send a message and get response"""
-    if not state.connected:
-        return jsonify({'status': 'error', 'message': 'Not connected to server'})
+    if len(state.connected_servers) == 0:
+        return jsonify({'status': 'error', 'message': 'Not connected to any server'})
 
     data = request.json
     query = data.get('message', '')
@@ -272,21 +444,39 @@ async def process_query_async(query: str):
                     'arguments': tool_args
                 })
 
-                # Call the MCP tool
+                # Find which server provides this tool
+                tool_obj = next((t for t in state.available_tools if t.name == tool_name), None)
+                if not tool_obj:
+                    error_msg = f"Tool {tool_name} not found in any connected server"
+                    state.add_log('error', error_msg)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": error_msg
+                    })
+                    continue
+
+                server_name = tool_obj.server_name
+                server_session = state.servers[server_name]['session']
+
+                # Call the MCP tool on the correct server
                 mcp_request = {
                     'tool': tool_name,
-                    'arguments': tool_args
+                    'arguments': tool_args,
+                    'server': server_name
                 }
-                state.add_log('mcp_client', f'📤 Sending tool request to MCP server: {tool_name}', mcp_request)
+                state.add_log('mcp_client', f'📤 Sending tool request to {server_name}: {tool_name}', mcp_request)
 
-                result = await state.session.call_tool(tool_name, tool_args)
+                result = await server_session.call_tool(tool_name, tool_args)
 
                 mcp_response = {
                     'tool': tool_name,
+                    'server': server_name,
                     'result': str(result.content),
                     'content_type': type(result.content).__name__
                 }
-                state.add_log('mcp_server', f'📥 Tool execution complete: {tool_name}', mcp_response)
+                state.add_log('mcp_server', f'📥 {server_name} tool execution complete: {tool_name}', mcp_response)
 
                 # Add tool result to messages
                 messages.append({
@@ -311,8 +501,10 @@ def get_history():
 def get_status():
     """Get connection status"""
     return jsonify({
-        'connected': state.connected,
-        'tools_count': len(state.available_tools) if state.connected else 0
+        'connected': len(state.connected_servers) > 0,
+        'connected_servers': state.connected_servers,
+        'total_servers': len(state.server_configs),
+        'tools_count': len(state.available_tools)
     })
 
 
