@@ -221,6 +221,139 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* Logs Section */
+        .logs-toggle {
+            padding: 8px 15px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: auto;
+            transition: background 0.3s;
+        }
+
+        .logs-toggle:hover {
+            background: #5a6268;
+        }
+
+        .clear-logs-btn {
+            padding: 8px 15px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+            transition: background 0.3s;
+        }
+
+        .clear-logs-btn:hover {
+            background: #c82333;
+        }
+
+        .logs-container {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .logs-container.expanded {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .logs-content {
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .log-entry {
+            padding: 8px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            border-left: 3px solid #6c757d;
+            background: white;
+        }
+
+        .log-entry.user {
+            border-left-color: #2980b9;
+            background: #e3f2fd;
+        }
+
+        .log-entry.openai {
+            border-left-color: #27ae60;
+            background: #e8f5e9;
+        }
+
+        .log-entry.mcp_client {
+            border-left-color: #f39c12;
+            background: #fff3cd;
+        }
+
+        .log-entry.mcp_server {
+            border-left-color: #8e44ad;
+            background: #f3e5f5;
+        }
+
+        .log-entry.system {
+            border-left-color: #95a5a6;
+            background: #f8f9fa;
+        }
+
+        .log-entry.error {
+            border-left-color: #e74c3c;
+            background: #ffebee;
+        }
+
+        .log-timestamp {
+            color: #6c757d;
+            font-size: 10px;
+            margin-right: 8px;
+        }
+
+        .log-type {
+            font-weight: bold;
+            margin-right: 8px;
+            text-transform: uppercase;
+        }
+
+        .log-data {
+            margin-top: 8px;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.5;
+            color: #2c3e50;
+        }
+
+        .log-data::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .log-data::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .log-data::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+
+        .log-data::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
     </style>
 </head>
 <body>
@@ -235,7 +368,15 @@
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">Not Connected</span>
             </div>
+            <button class="logs-toggle" onclick="toggleLogs()">📋 View Logs</button>
+            <button class="clear-logs-btn" onclick="clearLogs()">🗑️ Clear Logs</button>
             <button class="connect-btn" id="connectBtn" onclick="connect()">Connect to Server</button>
+        </div>
+
+        <div class="logs-container" id="logsContainer">
+            <div class="logs-content" id="logsContent">
+                <div class="log-entry system">No logs yet</div>
+            </div>
         </div>
 
         <div class="chat-container" id="chatContainer">
@@ -262,6 +403,95 @@
     <script>
         let connected = false;
         let processing = false;
+        let logsExpanded = false;
+        let logsPollInterval = null;
+
+        function toggleLogs() {
+            const logsContainer = document.getElementById('logsContainer');
+            logsExpanded = !logsExpanded;
+
+            if (logsExpanded) {
+                logsContainer.classList.add('expanded');
+                if (!logsPollInterval) {
+                    logsPollInterval = setInterval(fetchLogs, 1000);
+                }
+                fetchLogs();
+            } else {
+                logsContainer.classList.remove('expanded');
+                if (logsPollInterval) {
+                    clearInterval(logsPollInterval);
+                    logsPollInterval = null;
+                }
+            }
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/logs');
+                const data = await response.json();
+                displayLogs(data.logs);
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+            }
+        }
+
+        async function clearLogs() {
+            if (!confirm('Are you sure you want to clear all logs?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/logs/clear', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    displayLogs([]);
+                }
+            } catch (error) {
+                console.error('Error clearing logs:', error);
+                alert('Failed to clear logs');
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function displayLogs(logs) {
+            const logsContent = document.getElementById('logsContent');
+            logsContent.innerHTML = '';
+
+            if (logs.length === 0) {
+                logsContent.innerHTML = '<div class="log-entry system">No logs yet</div>';
+                return;
+            }
+
+            logs.forEach(log => {
+                const logEntry = document.createElement('div');
+                logEntry.className = `log-entry ${log.type}`;
+
+                const timestamp = new Date(log.timestamp).toLocaleTimeString();
+                let html = `<span class="log-timestamp">${timestamp}</span>`;
+                html += `<span class="log-type">${log.type}</span>`;
+                html += `<span>${log.message}</span>`;
+
+                if (log.data) {
+                    const formattedJson = JSON.stringify(log.data, null, 2);
+                    html += `<div class="log-data">${escapeHtml(formattedJson)}</div>`;
+                }
+
+                logEntry.innerHTML = html;
+                logsContent.appendChild(logEntry);
+            });
+
+            logsContent.scrollTop = logsContent.scrollHeight;
+        }
 
         function addMessage(role, content, type = 'message') {
             const chatContainer = document.getElementById('chatContainer');

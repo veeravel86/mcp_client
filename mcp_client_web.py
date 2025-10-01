@@ -28,6 +28,18 @@ class MCPClientState:
         self.connected = False
         self.loop = None
         self.chat_history = []
+        self.logs = []
+
+    def add_log(self, log_type: str, message: str, data: any = None):
+        """Add a log entry"""
+        import datetime
+        log_entry = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'type': log_type,
+            'message': message,
+            'data': data
+        }
+        self.logs.append(log_entry)
 
 state = MCPClientState()
 
@@ -67,18 +79,23 @@ def connect():
 async def connect_async():
     """Async connection to MCP server"""
     try:
+        state.add_log('system', 'Starting connection to MCP server...')
+
         # Check for API key
         if not os.environ.get("OPENAI_API_KEY"):
+            state.add_log('error', 'OPENAI_API_KEY not found in environment')
             return {'status': 'error', 'message': 'OPENAI_API_KEY not found in environment'}
 
         # Initialize OpenAI client
         state.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        state.add_log('system', 'OpenAI client initialized')
 
         # Get server script path
         server_script = os.environ.get(
             "MCP_SERVER_SCRIPT",
             "/Users/veeravelmanivannan/AI_projects/mcp_client/mcp_server.py"
         )
+        state.add_log('system', f'MCP server script: {server_script}')
 
         # Connect to MCP server
         server_params = StdioServerParameters(
@@ -96,14 +113,29 @@ async def connect_async():
         )
 
         await state.session.initialize()
+        state.add_log('mcp_server', 'MCP session initialized')
 
         # List available tools
+        state.add_log('mcp_client', 'Requesting tool list from MCP server')
         response = await state.session.list_tools()
         state.available_tools = response.tools
+
+        # Log complete tool schemas
+        tools_with_schemas = [
+            {
+                'name': tool.name,
+                'description': tool.description,
+                'inputSchema': tool.inputSchema
+            } for tool in state.available_tools
+        ]
+        state.add_log('mcp_server', f'Received {len(state.available_tools)} tools with schemas',
+                     {'tools': tools_with_schemas})
 
         state.connected = True
 
         tools_list = [{'name': tool.name, 'description': tool.description} for tool in state.available_tools]
+
+        state.add_log('system', 'Connection established successfully')
 
         return {
             'status': 'success',
@@ -112,6 +144,7 @@ async def connect_async():
         }
 
     except Exception as e:
+        state.add_log('error', f'Connection failed: {str(e)}')
         return {'status': 'error', 'message': str(e)}
 
 
@@ -141,6 +174,8 @@ def send_message():
 async def process_query_async(query: str):
     """Process a query using OpenAI and available MCP tools"""
     try:
+        state.add_log('user', f'User query: {query}')
+
         messages = [
             {
                 "role": "user",
@@ -161,10 +196,30 @@ async def process_query_async(query: str):
             for tool in state.available_tools
         ]
 
+        # Log the tool schemas that will be sent to OpenAI
+        state.add_log('system', 'Tool schemas available for OpenAI',
+                     {'tools': tools})
+
         tool_executions = []
 
         # Agentic loop
+        loop_count = 0
         while True:
+            loop_count += 1
+
+            # Log full request with complete tool schemas
+            request_data = {
+                'model': 'gpt-4-turbo-preview',
+                'messages': [
+                    {
+                        'role': msg.get('role') if isinstance(msg, dict) else getattr(msg, 'role', 'unknown'),
+                        'content': str(msg.get('content') if isinstance(msg, dict) else getattr(msg, 'content', ''))[:500]
+                    } for msg in messages
+                ],
+                'tools': tools if tools else []  # Include complete tool schemas
+            }
+            state.add_log('openai', f'📤 Request to OpenAI (iteration {loop_count})', request_data)
+
             response = state.client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 max_tokens=4096,
@@ -174,6 +229,21 @@ async def process_query_async(query: str):
 
             response_message = response.choices[0].message
 
+            # Log full response
+            response_data = {
+                'role': 'assistant',
+                'content': response_message.content,
+                'tool_calls': [
+                    {
+                        'id': tc.id,
+                        'name': tc.function.name,
+                        'arguments': tc.function.arguments
+                    } for tc in response_message.tool_calls
+                ] if response_message.tool_calls else None,
+                'finish_reason': response.choices[0].finish_reason
+            }
+            state.add_log('openai', f'📥 Response from OpenAI', response_data)
+
             # Add assistant response to messages
             messages.append(response_message)
 
@@ -181,6 +251,7 @@ async def process_query_async(query: str):
             if not response_message.tool_calls:
                 # Add to chat history
                 state.chat_history.append({'role': 'assistant', 'content': response_message.content})
+                state.add_log('system', 'Query processing completed')
 
                 return {
                     'status': 'success',
@@ -193,13 +264,29 @@ async def process_query_async(query: str):
                 tool_name = tool_call.function.name
                 tool_args = eval(tool_call.function.arguments)
 
+                state.add_log('openai', f'🔧 OpenAI requesting tool execution: {tool_name}',
+                             {'tool_call_id': tool_call.id, 'arguments': tool_args})
+
                 tool_executions.append({
                     'name': tool_name,
                     'arguments': tool_args
                 })
 
                 # Call the MCP tool
+                mcp_request = {
+                    'tool': tool_name,
+                    'arguments': tool_args
+                }
+                state.add_log('mcp_client', f'📤 Sending tool request to MCP server: {tool_name}', mcp_request)
+
                 result = await state.session.call_tool(tool_name, tool_args)
+
+                mcp_response = {
+                    'tool': tool_name,
+                    'result': str(result.content),
+                    'content_type': type(result.content).__name__
+                }
+                state.add_log('mcp_server', f'📥 Tool execution complete: {tool_name}', mcp_response)
 
                 # Add tool result to messages
                 messages.append({
@@ -210,6 +297,7 @@ async def process_query_async(query: str):
                 })
 
     except Exception as e:
+        state.add_log('error', f'Error in query processing: {str(e)}')
         return {'status': 'error', 'message': str(e)}
 
 
@@ -226,6 +314,19 @@ def get_status():
         'connected': state.connected,
         'tools_count': len(state.available_tools) if state.connected else 0
     })
+
+
+@app.route('/logs', methods=['GET'])
+def get_logs():
+    """Get all logs"""
+    return jsonify({'logs': state.logs})
+
+
+@app.route('/logs/clear', methods=['POST'])
+def clear_logs():
+    """Clear all logs"""
+    state.logs = []
+    return jsonify({'status': 'success', 'message': 'Logs cleared'})
 
 
 if __name__ == '__main__':
